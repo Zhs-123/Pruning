@@ -1,0 +1,84 @@
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def pruned(net, train_data):
+    Q = 4
+    with torch.no_grad():
+        outputs = net.layer2(net.activation(net.layer1(train_data))).data
+        for i, module in enumerate(net.modules()):
+            if isinstance(module, torch.nn.Linear) and i == 2:
+                # Calculate Acon and Pthr
+                weights = module.weight.data
+                weights = weights.sum(dim=1)
+                avg_cons = torch.mean(torch.abs(torch.mul(outputs, weights)), dim=0)
+                num_node = torch.count_nonzero(weights)
+                p_thr = avg_cons.sum() / (Q * num_node)
+
+                # # Prune middle layer nodes
+                # num_pruned_node = 0
+                # for idx in range(len(avg_cons)):
+                #     if avg_cons[idx] < p_thr:
+                #         num_pruned_node += 1
+                #         avg_cons += avg_cons[idx] / (num_node - num_pruned_node)
+                # new_num_node = num_node - num_pruned_node
+                remaining_neurons_indices, adjusted_weights = prune_hidden_layer_neurons(avg_cons, weights, p_thr)
+    return remaining_neurons_indices, adjusted_weights
+
+
+def prune_hidden_layer_neurons(contribution_values: torch.Tensor, weights, threshold):
+    """
+    Prune hidden layer neurons based on their contribution values and threshold.
+
+    Args:
+        contribution_values (torch.Tensor): contribution values for each hidden layer neuron.
+        weights(torch.Tensor): neurons in hidden layer.
+        threshold (float): Pruning threshold.
+
+    Returns:
+        list: List of remaining hidden layer neurons after pruning.
+    """
+    # Create a mask to identify which neurons to keep
+    keep_mask = contribution_values > threshold
+
+    # Calculate the sum of weights of pruned neurons
+    pruned_weights_sum = sum([weight for weight, keep in zip(weights, keep_mask) if not keep])
+
+    # Calculate the number of remaining neurons after pruning
+    num_remaining_neurons = sum(keep_mask)
+
+    # Adjust weights for the remaining neurons
+    adjusted_weights = [weight + pruned_weights_sum / num_remaining_neurons if keep else 0
+                        for weight, keep in zip(weights, keep_mask)]
+
+    # Create a list of remaining neurons' indices
+    remaining_neurons_indices = [i for i, keep in enumerate(keep_mask) if keep]
+
+    return remaining_neurons_indices, adjusted_weights
+
+
+def construct_pruned_network(input_size, hidden_size, output_size, remaining_neurons_indices, adjusted_weights):
+    """
+    Construct the pruned network based on the adjusted weights for the hidden layer neurons.
+
+    Args:
+        input_size (int): Size of the input features.
+        hidden_size (int): Size of the hidden layer.
+        output_size (int): Size of the output layer.
+        remaining_neurons_indices (list): List of remaining hidden layer neurons' indices after pruning.
+        adjusted_weights (list): List of adjusted weights for the remaining hidden layer neurons.
+
+    Returns:
+        NeuralNet: Pruned NeuralNet model.
+    """
+    pruned_net = NeuralNet(input_size, hidden_size, output_size)
+
+    # Update the adjusted weights for the hidden layer
+    for i, idx_remaining_neuron in enumerate(remaining_neurons_indices):
+        pruned_net.layer2.weight.data[i][i] = adjusted_weights[idx_remaining_neuron]
+
+    return pruned_net
+
+The code for the pruning algorithm is available at [GitHub repository URL].
